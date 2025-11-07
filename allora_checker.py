@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Allora Prime Airdrop Checker
-Checks eligibility for airdrop with proxy support
-"""
 
 import requests
 import time
@@ -10,6 +6,8 @@ from typing import Optional, List
 from dataclasses import dataclass
 import sys
 from loguru import logger
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
 
 logger.remove()
@@ -70,7 +68,7 @@ class AlloraChecker:
                     
                     if data.get('status') and 'data' in data:
                         result_data = data['data']
-                        tier = result_data.get('default_tier', {})
+                        tier = result_data.get('default_tier') or {}
                         
                         return CheckResult(
                             address=address,
@@ -141,18 +139,23 @@ def load_file(filepath: str) -> List[str]:
 
 
 def print_result(result: CheckResult, index: int, total: int):
-    """Print check result"""
     short_addr = f"{result.address[:10]}...{result.address[-6:]}"
     
     if result.error:
         logger.warning(f"[{index}/{total}] {short_addr} - ERROR: {result.error}")
         return
     
+    status_parts = []
+    
     if result.airdrop_eligible:
-        alloc_str = f", Allocation: {result.airdrop_allocation}" if result.airdrop_allocation else ""
-        logger.success(f"[{index}/{total}] {short_addr} - AIRDROP ELIGIBLE{alloc_str}")
-    elif result.boost_eligible:
-        logger.info(f"[{index}/{total}] {short_addr} - Boost: {result.tier_name} ({result.boost_rate*100:.0f}%)")
+        alloc_str = f" (Allocation: {result.airdrop_allocation})" if result.airdrop_allocation else ""
+        status_parts.append(f"AIRDROP ELIGIBLE{alloc_str}")
+    
+    if result.boost_eligible:
+        status_parts.append(f"BOOST ELIGIBLE - {result.tier_name} ({result.boost_rate*100:.0f}%)")
+    
+    if status_parts:
+        logger.success(f"[{index}/{total}] {short_addr} - {', '.join(status_parts)}")
     else:
         logger.info(f"[{index}/{total}] {short_addr} - NOT ELIGIBLE")
 
@@ -208,17 +211,33 @@ def main():
     
     checker = AlloraChecker()
     results = []
+    lock = Lock()
     
     logger.info("Starting checks...")
     
-    for i, address in enumerate(addresses, 1):
+    max_workers = min(10, len(addresses))
+    
+    def check_with_index(i, address):
         proxy = proxies[(i-1) % len(proxies)] if proxies else None
         result = checker.check_address(address, proxy)
-        results.append(result)
-        print_result(result, i, len(addresses))
         
-        if i < len(addresses):
-            time.sleep(1)
+        with lock:
+            results.append(result)
+            print_result(result, i, len(addresses))
+        
+        return result
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(check_with_index, i, addr): i 
+                   for i, addr in enumerate(addresses, 1)}
+        
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as e:
+                logger.error(f"Thread error: {e}")
+    
+    results.sort(key=lambda x: addresses.index(x.address))
     
     print_summary(results)
     
