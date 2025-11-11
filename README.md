@@ -8,7 +8,7 @@ pip install -r requirements.txt
 
 ## Использование
 
-1. Создай `addresses.txt` - по одному адресу на строку
+1. Создай `seed.txt` - по одной seed фразе на строку
 2. Создай `proxies.txt` - формат `protocol://user:pass@host:port`
 3. Запусти:
 
